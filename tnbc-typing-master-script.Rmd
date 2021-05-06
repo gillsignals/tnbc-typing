@@ -1,0 +1,193 @@
+---
+title: "Master script for TNBC typing project"
+author: "Amy Gill"
+date: "5/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This script combines several independent scripts so that all the code is in one place.
+
+Component scripts:
+
+`1-get-data.Rmd`
+
+
+## Libraries
+
+```{r message=FALSE}
+library(stringr)
+library(tidyverse)
+library(SingleCellExperiment)
+```
+
+## Import single cell data from GEO
+
+### Original paper
+
+Karaayvaz M, Cristea S, Gillespie SM, Patel AP et al. Unravelling subclonal heterogeneity and aggressive disease states in TNBC through single-cell RNA-seq. Nat Commun 2018 Sep 4;9(1):3588. PMID: 30181541
+
+https://www-ncbi-nlm-nih-gov.proxy1.library.jhu.edu/geo/query/acc.cgi?acc=GSE118389
+
+### Dataset on GEO
+
+GEO link: https://www-ncbi-nlm-nih-gov.proxy1.library.jhu.edu/geo/query/acc.cgi?acc=GSE118389
+
+### Download data
+
+#### TPM counts before normalization
+
+- Downloaded `GSE118389_tpm_rsem.txt.gz`.
+- Unzipped with `gunzip GSE118389_tpm_rsem.txt.gz`
+
+#### Normalized data
+
+- Downloaded `GSE118398_norm_data.txt.gz`.
+- Unzipped with `gunzip GSE118389_norm_data.txt.gz`
+
+#### Metadata
+
+- Downloaded `GSE118389_series_matrix.txt.gz`
+- Unzipped wth `gunzip GSE118389_series_matrix.txt.gz`
+
+##### Overall design
+
+"Single cell RNA sequencing of 1,534 cells in six fresh triple negative breast cancer tumors."
+
+##### Sample collection protocol
+
+"Fresly collected human tumor samples were mechanically and enzymatically digested using tumor dissociation kit (Miltenyi Biotec). Single cells were sorted by flow cytometry, lysed and snap frozen on dry ice immediately."
+
+##### Library preparation
+
+"RNA libraries were prepared using Smart-seq2 protocol (Picelli et al., 2014)"
+
+##### Sequencing instrument
+
+Illumina Genome Analyzer
+
+##### Genome build
+
+GRCh38
+
+##### TPM calculations
+
+"Fastq files were quantified to transcript per million (TPM) expression values with RSEM with default parameters"
+
+##### Removing low quality cells
+
+"Low quality cells were filtered as follows: 4 median absolute deviations (MADs) below the median for any of the three metrics concering: i) library size; ii) number of expressed genes; iii) total amount of mRNA"
+
+##### Removing unexpressed genes
+
+"Unexpressed genes were removed as follows: a gene was considered unexpressed if log2(TPM+1) < 0.1 in at least 95% of cells separately for each patient"
+
+##### Normalization
+
+"Data was normalized following a three-step combination approach: i) Transform the TPM values into relative counts with the Census algorithm (Qiu et al, 2017); ii) Normalize the Census counts with the deconvolution strategy implemented in scran (Lun et al 2016); iii) Remove additional sources of variation with RUVSeq (Risso et al, 2014)"
+
+
+
+### Format normalized data
+
+#### Read normalized data
+
+```{r}
+# import as data frame
+tnbc <- read.table("data/GSE118389_norm_data.txt")
+
+# convert to matrix
+tnbc_mat <- as.matrix(tnbc)
+```
+
+#### Create column data
+
+All samples are from human triple negative breast cancer and were processed identically. The main factor that differs between samples is that they come from 6 different patients. Patient ID is embedded in the sample name.
+
+```{r}
+# extract patient ID from column name
+patient_id <- sapply(1:length(colnames(tnbc)), function(i){
+	str_split(colnames(tnbc)[i], pattern = "_")[[1]][1]    # portion of the column name before the first underscore
+})
+
+# table of number of cells per patient - as expected, matches original publication
+data.frame(table(patient_id)) %>%
+	mutate("Patient ID" = patient_id,
+		   "Number of cells" = Freq) %>%
+	select(-c(patient_id, Freq))
+```
+
+```{r}
+# bind sample ID and patient ID into data frame
+coldata <- DataFrame(sample_id = colnames(tnbc),
+					  patient_id = patient_id)
+
+# set row names to sample ID for compatibility with SingleCellExperiment format
+rownames(coldata) <- colnames(tnbc)
+```
+
+#### Create row data
+
+Initial row data consists only of gene names, which are currently the row names of the expression matrix
+
+```{r}
+# add feature symbols (gene names)
+rowdata <- data.frame(feature_symbol = rownames(tnbc))
+
+# add row names for proper SingleCellExperiment functionality (gene names)
+rownames(rowdata) <- rownames(tnbc)
+```
+
+#### Convert to SingleCellExperiment format
+
+```{r}
+sce <- SingleCellExperiment(tnbc_mat)    # add normalized count data
+colData(sce) <- coldata    # add sample info
+rowData(sce) <- rowdata    # add gene info
+
+# set name of assay for compatibility with downstream tools
+# (some algorithms threw errors when there was no counts or logcounts, and these data are not log-normalized)
+names(assays(sce)) <- "normcounts"
+
+# save to rda format
+save(sce, file = "sce.rda")
+```
+
+### Create alternate SingleCellExperiment with TPM counts before normalization
+
+SC3 requires the TPM counts in addition to the normalized counts in order to calculate dropout. I created a separate `sce_tpm` object for this instead of modifying `sce` because I had already done downstream processing that used the normcounts slot, and I didn't want to risk breaking anything.
+
+```{r}
+# read TPM data
+tpm <- read.table("data/GSE118389_tpm_rsem.txt")
+tpm <- as.matrix(tpm)
+
+# extract patient ID from column names
+pt_id_tpm <- sapply(1:length(colnames(tpm)), function(i){
+	str_split(colnames(tpm)[i], pattern = "_")[[1]][1]    # portion of the column name before the first underscore
+})
+
+# bind sample ID and patient ID into data frame
+coldata_tpm <- DataFrame(sample_id = colnames(tpm),
+					  patient_id = pt_id_tpm)
+
+# set row names to sample ID for compatibility with SingleCellExperiment format
+rownames(coldata_tpm) <- colnames(tpm)
+
+# create rowData from row names
+rowdata_tpm <- data.frame(feature_symbol = rownames(tpm))
+rownames(rowdata_tpm) <- rownames(tpm)
+
+# create SingleCellExperiment with TPM
+sce_tpm <- SingleCellExperiment(tpm)    # add TPM data
+colData(sce_tpm) <- coldata_tpm    # add sample info
+rowData(sce_tpm) <- rowdata_tpm    # add gene info
+
+names(assays(sce_tpm)) <- "counts"
+
+# save as rda
+save(sce_tpm, file = "sce_tpm.rda")
+```

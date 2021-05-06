@@ -1,0 +1,161 @@
+---
+title: "Karayyvaz replication v1"
+author: "Amy Gill"
+date: "3/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+```{r}
+library(stringr)
+library(tidyverse)
+library(SingleCellExperiment)
+```
+
+## Paper
+
+Karaayvaz M, Cristea S, Gillespie SM, Patel AP et al. Unravelling subclonal heterogeneity and aggressive disease states in TNBC through single-cell RNA-seq. Nat Commun 2018 Sep 4;9(1):3588. PMID: 30181541
+
+https://www-ncbi-nlm-nih-gov.proxy1.library.jhu.edu/geo/query/acc.cgi?acc=GSE118389
+
+## Dataset
+
+GEO: https://www-ncbi-nlm-nih-gov.proxy1.library.jhu.edu/geo/query/acc.cgi?acc=GSE118389
+
+Description on GEO: "Single cell RNA sequencing of 1,534 cells in six fresh triple negative breast cancer tumors"
+
+## Downloading data
+
+### Normalized data
+
+- Downloaded `GSE118398_norm_data.txt.gz`.
+- Unzipped with `gunzip GSE118389_norm_data.txt.gz`.
+
+### Metadata
+
+- Downloaded `GSE118389_series_matrix.txt.gz`.
+- Unzipped wth `gunzip GSE118389_series_matrix.txt.gz`.
+
+## Importing data
+
+### Read normalized data
+
+```{r}
+# import as data frame
+tnbc <- read.table("GSE118389_norm_data.txt")
+
+# convert to matrix
+tnbc_mat <- as.matrix(tnbc)
+```
+
+
+
+
+
+### Create column data
+
+All samples are from human triple negative breast cancer and were processed identically. The main factor that differs between samples is that they come from 6 different patients. Patient ID is embedded in the sample name.
+
+```{r}
+# extract patient ID from column name
+patient_id <- sapply(1:length(colnames(tnbc)), function(i){
+	str_split(colnames(tnbc)[i], pattern = "_")[[1]][1]    # portion of the column name before the first underscore
+})
+
+# table of number of cells per patient
+data.frame(table(patient_id)) %>%
+	mutate("Patient ID" = patient_id,
+		   "Number of cells" = Freq) %>%
+	select(-c(patient_id, Freq))
+
+```
+
+```{r}
+# bind sample ID and patient ID into data frame
+coldata <- DataFrame(sample_id = colnames(tnbc),
+					  patient_id = patient_id)
+
+# set row names to sample ID for compatibility with SingleCellExperiment format
+rownames(coldata) <- colnames(tnbc)
+```
+
+## Create rowData
+
+```{r}
+rowdata <- data.frame(feature_symbol = rownames(tnbc))
+
+rownames(rowdata) <- rownames(tnbc)
+```
+
+
+## Convert to SingleCellExperiment format
+
+```{r}
+sce <- SingleCellExperiment(tnbc_mat)    # add normalized count data
+colData(sce) <- coldata    # add sample info
+rowData(sce) <- rowdata    # add gene info
+
+# inspect object
+# sce
+# colData(sce)
+# rowData(sce)
+```
+
+```{r}
+# set name of assay for compatibility with scmap
+# (some algorithms threw errors when there was no counts or logcounts, and these data are not log-normalized)
+names(assays(sce)) <- "normcounts"
+```
+
+
+```{r}
+# save to rda format
+save(sce, file = "sce.rda")
+```
+
+### Read raw count data
+
+```{r}
+counts <- read.table("GSE118389_counts_rsem.txt")
+```
+
+
+### Read and format TPM data
+
+```{r}
+# read TPM data
+tpm <- read.table("GSE118389_tpm_rsem.txt")
+tpm <- as.matrix(tpm)
+
+# extract patient ID from column names
+pt_id_tpm <- sapply(1:length(colnames(tpm)), function(i){
+	str_split(colnames(tpm)[i], pattern = "_")[[1]][1]    # portion of the column name before the first underscore
+})
+
+# bind sample ID and patient ID into data frame
+coldata_tpm <- DataFrame(sample_id = colnames(tpm),
+					  patient_id = pt_id_tpm)
+
+# set row names to sample ID for compatibility with SingleCellExperiment format
+rownames(coldata_tpm) <- colnames(tpm)
+
+# create rowData from row names
+rowdata_tpm <- data.frame(feature_symbol = rownames(tpm))
+rownames(rowdata_tpm) <- rownames(tpm)
+
+# create SingleCellExperiment with TPM
+sce_tpm <- SingleCellExperiment(tpm)    # add TPM data
+colData(sce_tpm) <- coldata_tpm    # add sample info
+rowData(sce_tpm) <- rowdata_tpm    # add gene info
+
+names(assays(sce_tpm)) <- "counts"
+
+# save as rda
+save(sce_tpm, file = "sce_tpm.rda")
+```
+
