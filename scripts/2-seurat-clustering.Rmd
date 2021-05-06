@@ -181,7 +181,7 @@ seurat_markers %>%
 ```{r}
 top5 <- seurat_markers %>%
 	group_by(cluster) %>%
-	top_n(5, wt = avg_log2FC)
+	top_n(5, wt = avg_diff)
 
 DoHeatmap(tnbc_seurat, features = top5$gene) + NoLegend()
 ```
