@@ -416,3 +416,55 @@ sce_post_seurat <- as.SingleCellExperiment(tnbc_seurat)
 save(sce_post_seurat, file = "rdata/sce_post_seurat.rda")
 ```
 
+## Aside: tSNE and UMAP showing patient ID before regressing out patient effect
+
+### Preprocessing to run tSNE and UMAP before removing patient effect
+
+```{r}
+# find variable features without removing patient effect
+tnbc_seurat_pre_reg <- FindVariableFeatures(tnbc_seurat_pre_reg, selection.method = "vst", nfeatures = 2000)
+
+# center and scale data without removing patient effect
+tnbc_seurat_pre_reg <- ScaleData(tnbc_seurat_pre_reg, features = rownames(tnbc_seurat_pre_reg))
+
+# PCA without removing patient effect
+tnbc_seurat_pre_reg <- RunPCA(tnbc_seurat_pre_reg, features = VariableFeatures(tnbc_seurat_pre_reg))
+```
+
+### tSNE plot of patients before removing patient effect
+
+```{r}
+# run tSNE without removing patient effect
+tnbc_seurat_pre_reg <- RunTSNE(tnbc_seurat_pre_reg, dims = 1:50)
+
+# create tSNE plot without removing patient effect and color by patient
+tsne_patient_pre_reg <- DimPlot(tnbc_seurat_pre_reg, reduction = "tsne",
+		group.by = "patient_id") +
+	ggtitle("tSNE plot of patients before removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+
+# inspect tSNE plot created without removing patient effect
+tsne_patient_pre_reg
+
+# save tSNE plot created without removing patient effect
+ggsave(tsne_patient_pre_reg, filename = "results/tsne-patient-pre-reg.png", width = 7, height = 4)
+```
+
+### UMAP plot of patients before removing patient effect
+
+```{r}
+# run UMAP without removing patient effect
+tnbc_seurat_pre_reg <- RunUMAP(tnbc_seurat_pre_reg, dims = 1:50)
+
+# create tSNE plot without removing patient effect and color by patient
+umap_patient_pre_reg <- DimPlot(tnbc_seurat_pre_reg, reduction = "umap",
+		group.by = "patient_id") +
+	ggtitle("UMAP plot of patients before removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+
+# inspect UMAP plot created without removing patient effect
+umap_patient_pre_reg
+
+# save tSNE plot created without removing patient effect
+ggsave(umap_patient_pre_reg, filename = "results/umap-patient-pre-reg.png", width = 7, height = 4)
+```
