@@ -468,3 +468,114 @@ umap_patient_pre_reg
 # save tSNE plot created without removing patient effect
 ggsave(umap_patient_pre_reg, filename = "results/umap-patient-pre-reg.png", width = 7, height = 4)
 ```
+
+## Marker gene based cell typing (a.k.a literature-based cell typing)
+
+### Importing marker gene list
+
+These data were imported from the PDF of supplementary table 7 of Karaayvaz et al., 2018.
+
+#### Paper description of marker genes and classification strategy
+
+"The literature-based list used to classify cell types consists of 49 expression markers specific to four cell types, compiled from multiple references (Tirosh et al., 2016) (Table 7). In order to minimize the number of misassignments, we only assign cells to a specific cell type when we consider that there is enough expression-based evidence supporting the assignment (expression threshold = 1). To this end, we derive a series of expert-based rules:
+
+1. Epithelial class: a cell has epithelial characteristics if it expresses either:
+
+- at least 2 epithelial markers;
+
+- only one of the strongest breast epithelial markers: EPCAM, KRT8, KRT18, KRT19, with expression
+higher than in 50% of the cells for that respective patient, for that marker.
+
+2. Specific immune class: a cell has specific immune characteristics (T cell, B cell, macrophage) if it expresses
+either:
+
+-only specific immune markers of that type (at least 2);
+
+-PTPRC and only specific immune markers of that type (at least 1);
+
+-at least 3 immune markers of that type, and at most 1 immune marker of another type.
+
+3. Stroma class: a cell has stroma characteristics if it expresses either:
+
+- only stroma markers;
+
+- at least 3 stroma markers and at most 1 endothelial marker.
+
+4. Endothelial class: a cell has endothelial characteristics if it expresses either:
+
+- only endothelial markers;
+
+- at least 3 endothelial markers and at most 1 stroma marker."
+
+#### Import marker gene table from PDF of supplement
+
+```{r}
+supp <- pdf_text("paper/supplement.pdf")
+```
+
+Supplementary table 7 is split across pages 35 and 36. First extract the rows of the table from page 35:
+
+```{r}
+# extract page 35 of the supplement as text
+p35 <- supp[[35]]
+
+# split into a vector of lines
+p35_split <- str_split(p35, "\r\n")[[1]]
+
+# remove leading and trailing whitespace
+p35_split <- str_trim(p35_split)
+
+# start building vector to turn into table 
+s7_dat <- p35_split[14:50]
+```
+
+Append the rows of the table from page 36:
+
+```{r}
+# extract page 36 of the supplement as text
+p36 <- supp[[36]]
+
+# split into a vector of lines
+p36_split <- str_split(p36, "\r\n")[[1]]
+
+# remove leading and trailing whitespace
+p36_split <- str_trim(p36_split)
+
+# append to vector 
+s7_dat <- c(s7_dat, p36_split[1:12])
+```
+
+Split the elements of the vector on whitespace. The first chunk of each element is the marker gene, the second chunk is the cell type indicated by that marker gene, and the third chunk (when present) is the cell subtype indicated by that marker gene.
+
+```{r}
+# split on more than one space
+s7_split <- str_split(s7_dat, pattern = "\\s\\s+")
+
+# extract marker gene name (first elements of s7_split)
+marker <- sapply(1:length(s7_split), function(i){
+	s7_split[[i]][1]
+})
+
+# extract cell type indicated by marker (second elements of s7_split)
+cell_type <- sapply(1:length(s7_split), function(i){
+	s7_split[[i]][2]
+})
+
+# extract cell subtype indicated by marker (third elements of s7_split, if they exist)
+cell_subtype <- sapply(1:length(s7_split), function(i){
+	ifelse(length(s7_split[[i]]) > 2, s7_split[[i]][3], NA)
+})
+```
+
+Combine the marker gene, cell type and cell subtype into a data frame, then save that data frame.
+
+```{r}
+# create data frame of cell type markers
+cell_type_markers <- data.frame(marker = marker,
+		   cell_type = cell_type,
+		   cell_subtype = cell_subtype)
+
+# save table of cell type markers
+save(cell_type_markers, file = "rdata/cell_type_markers.rda")
+```
+
