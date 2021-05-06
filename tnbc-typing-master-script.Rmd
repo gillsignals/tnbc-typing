@@ -399,7 +399,7 @@ top5 <- seurat_markers %>%
 	group_by(cluster) %>%
 	top_n(5, wt = avg_diff)
 
-louvain_de_heat <- DoHeatmap(tnbc_seurat, features = top5$gene) + NoLegend()
+louvain_de_heat <- DoHeatmap(tnbc_seurat, features = top5$gene, size = 3, slot = "scale.data") + NoLegend()
 
 louvain_de_heat
 
@@ -1167,7 +1167,7 @@ ggsave(type_count_barplot, filename = "results/type-count-barplot.png", height =
 ```
 ###  Visualize marker gene based cell types with tSNE and UMAP
 
-#### tSNE
+#### tSNE plot of marker-based cell types
 
 ```{r}
 # color tSNE with literature-based cell types
@@ -1185,7 +1185,8 @@ ggsave(tsne_lit_cell_type, filename = "results/tsne-lit-cell-types.png", width =
 
 ```
 
-#### UMAP
+#### UMAP plot of marker-based cell types
+
 
 ```{r}
 # color UMAP with literature-based cell types
@@ -1200,4 +1201,34 @@ umap_lit_cell_type
 
 # save UMAP plot with literature-based cell types
 ggsave(umap_lit_cell_type, filename = "results/umap-lit-cell-types.png", width = 7, height = 4)
+```
+### Find genes differentially expressed across cell types
+
+```{r}
+# set identity for finding markers to literature-based cell type
+tnbc_seurat <- SetIdent(tnbc_seurat, value = "lit_cell_type")
+
+# find marker genes differentially expressed in each literature-based cell type compared to other types
+celltype_markers <- FindAllMarkers(tnbc_seurat, logfc.threshold = 0.5, slot = "scale.data")
+
+# keep only differentially expressed markers with an adjusted pval less than .05
+celltype_markers <- celltype_markers %>%
+	filter(p_val_adj <= .05)
+
+save(celltype_markers, file = "rdata/celltype_markers.rda")
+
+# find top 5 differentially expressed genes for each cell type
+top5 <- celltype_markers %>%
+	group_by(cluster) %>%
+	top_n(5, wt = avg_diff)
+
+# create heatmap of top 5 DE genes for each cell type
+celltype_de_heat <- DoHeatmap(tnbc_seurat, features = top5$gene, size = 3, angle = 40, slot = "scale.data",
+                              group.colors = colorblind_palette[c(3, 4, 8, 5, 7, 1, 2, 6)])
+
+# inspect heatmap
+celltype_de_heat
+
+# save heatmap of top 5 DE genes for each cell type
+ggsave(celltype_de_heat, filename = "results/type-de-genes-heat.png", width = 8, height = 6)
 ```
