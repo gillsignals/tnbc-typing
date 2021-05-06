@@ -9,19 +9,23 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-This script combines several independent scripts so that all the code is in one place.
+This script combines several independent scripts so that all the code for this project is in one place.
 
 Component scripts:
 
 `1-get-data.Rmd`
 
 
-## Libraries
+## Libraries and color scheme
 
 ```{r message=FALSE}
 library(stringr)
 library(tidyverse)
 library(SingleCellExperiment)
+library(Seurat)
+library(pdftools)
+
+colorblind_palette <- c("#000000", "#D55E00",  "#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2",  "#CC79A7")
 ```
 
 ## Import single cell data from GEO
@@ -191,3 +195,224 @@ names(assays(sce_tpm)) <- "counts"
 # save as rda
 save(sce_tpm, file = "rdata/sce_tpm.rda")
 ```
+
+### Create Seurat object from SingleCellExperiment
+
+```{r}
+tnbc_seurat <- as.Seurat(sce, counts = "normcounts", data = "normcounts")
+```
+### Checkpoint: Seurat object before scaling and regression
+
+```{r}
+tnbc_seurat_pre_reg <- tnbc_seurat
+save(tnbc_seurat_pre_reg, file = "rdata/tnbc_seurat_pre_reg.rda")
+```
+
+
+## Preprocessing
+
+### Regress out patient effect
+
+In the original paper, clustering was performed after regressing out patient-specific effects. Therefore, I will do the same.
+
+```{r}
+# scale data while regressing out patient_id variable
+tnbc_seurat <- ScaleData(tnbc_seurat, vars.to.regress = "patient_id", features = rownames(tnbc_seurat))
+```
+
+### Find variable features
+
+```{r}
+# identify 2000 most variable features
+tnbc_seurat <- FindVariableFeatures(tnbc_seurat, selection.method = "vst", nfeatures = 2000)
+
+# create variable feature plot
+p1 <- VariableFeaturePlot(tnbc_seurat)
+
+# label top 8 most variable features
+top8 <- head(VariableFeatures(tnbc_seurat), 8)
+p2 <- LabelPoints(plot = p1, points = top8, repel = TRUE, xnudge = 0.05, ynudge = 0.01)
+
+# view variable feature plot
+p2
+
+# save labeled variable feature plot
+ggsave(p2, filename = "results/var-features.png", height = 4, width = 7)
+```
+
+### Dimensionality reduction and projection
+
+#### Principal component analysis
+
+```{r}
+# perform PCA with the 2000 most variable features
+tnbc_seurat <- RunPCA(tnbc_seurat, features = VariableFeatures(tnbc_seurat))
+```
+
+#### tSNE
+
+```{r}
+# run tSNE on the top 50 PCs
+tnbc_seurat <- RunTSNE(tnbc_seurat, dims = 1:50)
+```
+
+
+#### UMAP
+
+```{r}
+# run UMAP on the top 50 PCs with the R-native UWOT method and cosine metric
+tnbc_seurat <- RunUMAP(tnbc_seurat, dims = 1:50)
+```
+
+### Color tSNE and UMAP by patient ID
+
+#### tSNE
+
+```{r}
+# color tSNE plot by patient ID
+patient_tsne <- DimPlot(tnbc_seurat, reduction = "tsne", group.by = "patient_id") +
+	ggtitle("tSNE plot of patients after removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+
+# inspect tSNE plot colored by patient ID
+patient_tsne
+
+# save tSNE plot colored by patient ID
+ggsave(patient_tsne, filename = "results/patient-tsne.png", width = 7, height = 4)
+```
+
+#### UMAP
+
+```{r}
+# color UMAP plot by patient ID
+patient_umap <- DimPlot(tnbc_seurat, reduction = "umap", group.by = "patient_id") +
+	ggtitle("UMAP plot of patients after removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+
+# inspect UMAP plot colored by patient ID
+patient_umap
+
+# save UMAP plot colored by patient ID
+ggsave(patient_umap, filename = "results/patient-umap.png", width = 7, height = 4)
+```
+
+
+## Louvain clustering with Seurat
+
+### Find neighbors
+
+```{r}
+# compute nearest neighbor graph and shared nearest neighbors (SNN) at the cell level
+tnbc_seurat <- FindNeighbors(tnbc_seurat, dims = 1:50)
+```
+
+### Testing clustering resolutions
+
+The tested range of resolution parameters was suggested by the [Seurat clustering tutorial](https://satijalab.org/seurat/articles/pbmc3k_tutorial.html) for datasets of up to 3000 cells.
+
+```{r}
+# run clustering with a range of resolution parameters
+rez <- seq(0.4, 1.2, 0.1)
+clust <- sapply(rez, function(x){
+	trez <- FindClusters(tnbc_seurat, resolution = x)
+	length(table(Idents(trez)))
+})
+rez_clust <- data.frame(rez, clust)
+
+# scatter plot and curve fit for number of clusters versus Louvain resolution parameter
+gg_rez_clust <- rez_clust %>%
+	ggplot(aes(rez, clust)) +
+	geom_point() + 
+	geom_line() +
+	xlab("Resolution parameter of Louvain clustering") +
+	ylab("Number of clusters") +
+	ggtitle("Clusters identified at different resolutions by the Louvain algorithm") +
+	ylim(c(5,20))
+
+# view plot of number of clusters versus resolution
+gg_rez_clust
+
+# save clustering resolution plot
+ggsave(gg_rez_clust, file = "results/clustering-resolutions.png", height = 4, width = 6)
+```
+
+At resolutions greater than or equal to 1, there are 18 clusters. Moving forward, I use a resolution of 1.
+
+### Perform clustering
+
+```{r}
+# Louvain clustering with a resolution of 1
+tnbc_seurat <- FindClusters(tnbc_seurat, resolution = 1)
+
+# number of cells per Louvain cluster
+table(tnbc_seurat$seurat_clusters)
+```
+
+### tSNE plot of Louvain clusters
+
+```{r}
+# color tSNE plot by Louvain clusters
+louvain_tsne <- DimPlot(tnbc_seurat, reduction = "tsne",
+		group.by = "seurat_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("tSNE plot of Louvain clusters")
+
+# inspect tSNE plot of Louvain clusters
+louvain_tsne
+
+# save tSNE plot of Louvain clusters
+ggsave(louvain_tsne, filename = "results/louvain_tsne.png", height = 4, width = 7)
+```
+
+
+### UMAP plot of Louvain clusters
+
+```{r}
+# color UMAP plot by Louvain clusters
+louvain_umap <- DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "seurat_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of Louvain clusters")
+
+# inspect UMAP plot of Louvain clusters
+louvain_umap
+
+# save UMAP plot of Louvain clusters
+ggsave(louvain_umap, filename = "results/louvain_umap.png", height = 4, width = 7)
+```
+### Differentially expressed genes in Seurat clusters
+
+```{r}
+# find genes differentially expressed in one cluster versus all other clusters with log fold change >= 0.5
+seurat_markers <- FindAllMarkers(tnbc_seurat, logfc.threshold = 0.5, slot = "scale.data")
+
+# keep only differentially expressed markers with an adjusted pval less than .05
+seurat_markers <- seurat_markers %>%
+	filter(p_val_adj <= .05)
+
+# save marker genes
+save(seurat_markers, file = "rdata/seurat_markers.rda")
+
+# define top 5 differentially expressed genes in each cluster
+top5 <- seurat_markers %>%
+	group_by(cluster) %>%
+	top_n(5, wt = avg_diff)
+
+louvain_de_heat <- DoHeatmap(tnbc_seurat, features = top5$gene) + NoLegend()
+
+louvain_de_heat
+
+ggsave(louvain_de_heat, filename = "results/louvain-de-genes-heat.png", width = 10, height = 10)
+```
+
+### Save updated Seurat and SingleCellExperiment objects
+
+```{r}
+# save updated tnbc_seurat object
+save(tnbc_seurat, file = "rdata/tnbc_seurat.rda")
+
+# create updated sce object
+sce_post_seurat <- as.SingleCellExperiment(tnbc_seurat)
+save(sce_post_seurat, file = "rdata/sce_post_seurat.rda")
+```
+
