@@ -1,0 +1,60 @@
+---
+title: "Patient plots before regressing out patient effect"
+author: "Amy Gill"
+date: "4/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and data
+
+```{r}
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+
+colorblind_palette <- c("#000000", "#D55E00",  "#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2",  "#CC79A7")
+
+load("sce.rda")
+```
+
+```{r}
+tnbc_seurat_pre_reg <- as.Seurat(sce, counts = "normcounts", data = "normcounts")
+
+tnbc_seurat_pre_reg <- FindVariableFeatures(tnbc_seurat_pre_reg, selection.method = "vst", nfeatures = 2000)
+
+tnbc_seurat_pre_reg <- ScaleData(tnbc_seurat_pre_reg, features = rownames(tnbc_seurat_pre_reg))
+
+tnbc_seurat_pre_reg <- RunPCA(tnbc_seurat_pre_reg, features = VariableFeatures(tnbc_seurat_pre_reg))
+```
+
+
+
+## tSNE by patient ID
+
+```{r}
+tnbc_seurat_pre_reg <- RunTSNE(tnbc_seurat_pre_reg, dims = 1:50)
+DimPlot(tnbc_seurat_pre_reg, reduction = "tsne",
+		group.by = "patient_id") +
+	ggtitle("tSNE plot of patients before removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+```
+
+## UMAP by patient ID
+
+```{r}
+tnbc_seurat_pre_reg <- RunUMAP(tnbc_seurat_pre_reg, dims = 1:50)
+DimPlot(tnbc_seurat_pre_reg, reduction = "umap",
+		group.by = "patient_id") +
+	ggtitle("UMAP plot of patients before removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+```
+
+```{r}
+# save tnbc_seurat_pre_reg object
+save(tnbc_seurat_pre_reg, file = "tnbc_seurat_pre_reg.rda")
+```
+

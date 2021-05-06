@@ -1,0 +1,202 @@
+---
+title: "Seurat clustering"
+author: "Amy Gill"
+date: "4/17/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and data
+
+
+```{r}
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+
+colorblind_palette <- c("#000000", "#D55E00",  "#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2",  "#CC79A7")
+
+load("sce.rda")
+```
+
+## Create Seurat object from SingleCellExperiment
+
+```{r}
+tnbc_seurat <- as.Seurat(sce, counts = "normcounts", data = "normcounts")
+```
+
+```{r}
+tnbc_seurat
+```
+
+## Regress out patient effect
+
+In the original paper, clustering was performed after regressing out patient-specific effects. Therefore, I will do the same.
+
+```{r}
+tnbc_seurat <- ScaleData(tnbc_seurat, vars.to.regress = "patient_id", features = rownames(tnbc_seurat))
+```
+
+
+## Find variable features
+
+```{r}
+tnbc_seurat <- FindVariableFeatures(tnbc_seurat, selection.method = "vst", nfeatures = 2000)
+
+top8 <- head(VariableFeatures(tnbc_seurat), 8)
+
+p1 <- VariableFeaturePlot(tnbc_seurat)
+p2 <- LabelPoints(plot = p1, points = top8, repel = TRUE, xnudge = 0.05, ynudge = 0.01)
+p2
+```
+
+## PCA dimensional reduction
+
+```{r}
+tnbc_seurat <- RunPCA(tnbc_seurat, features = VariableFeatures(tnbc_seurat))
+```
+```{r}
+ElbowPlot(tnbc_seurat, ndims = 50)
+```
+
+## Run tSNE and UMAP
+
+```{r}
+tnbc_seurat <- RunTSNE(tnbc_seurat, dims = 1:50)
+tnbc_seurat <- RunUMAP(tnbc_seurat, dims = 1:50)
+```
+
+## Color tSNE and UMAP by patient
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "tsne",
+		group.by = "patient_id") +
+	ggtitle("tSNE plot of patients after removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+```
+
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "patient_id") +
+	ggtitle("UMAP plot of patients after removing patient effect") +
+	scale_color_manual(values = colorblind_palette[c(1:5,8)])
+```
+
+## Find clusters
+
+### Find neighbors
+
+```{r}
+tnbc_seurat <- FindNeighbors(tnbc_seurat, dims = 1:50)
+```
+
+### Testing clustering resolutions
+
+```{r}
+# run clustering with a range of resolution parameters
+rez <- seq(0.4, 1.2, 0.1)
+clust <- sapply(rez, function(x){
+	trez <- FindClusters(tnbc_seurat, resolution = x)
+	length(table(Idents(trez)))
+})
+rez_clust <- data.frame(rez, clust)
+# scatter plot and curve fit for number of clusters versus Louvain resoluton parameter
+rez_clust %>%
+	ggplot(aes(rez, clust)) +
+	geom_point() + 
+	geom_line() +
+	xlab("Resolution parameter of Louvain clustering") +
+	ylab("Number of clusters") +
+	ggtitle("Clusters identified at different resolutions by the Louvain algorithm") +
+	ylim(c(5,20))
+```
+At resolutions greater than or equal to 1, there are 18 clusters. Moving forward, I use a resolution of 1.
+
+```{r}
+tnbc_seurat <- FindClusters(tnbc_seurat, resolution = 1)
+```
+
+```{r}
+table(tnbc_seurat$seurat_clusters)
+```
+
+## tSNE
+
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "tsne",
+		group.by = "seurat_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("tSNE plot of Louvain clusters")
+```
+
+
+## UMAP
+
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "seurat_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of Louvain clusters")
+```
+
+
+## Save updated Seurat and SingleCellExperiment objects
+
+```{r}
+# save updated tnbc_seurat object
+save(tnbc_seurat, file = "tnbc_seurat.rda")
+
+# create updated sce object
+sce_post_seurat <- as.SingleCellExperiment(tnbc_seurat)
+save(sce_post_seurat, file = "sce_post_seurat.rda")
+```
+
+
+## Differentially expressed genes in Seurat clusters
+
+```{r}
+seurat_markers <- FindAllMarkers(tnbc_seurat, logfc.threshold = 0.5, slot = "scale.data")
+
+# keep only differentially expressed markers with an adjusted pval less than .05
+seurat_markers <- seurat_markers %>%
+	filter(p_val_adj <= .05)
+
+save(seurat_markers, file = "seurat_markers.rda")
+```
+
+```{r}
+# number of differentially expressed genes for each cluster
+seurat_markers %>%
+	group_by(cluster) %>%
+	summarize(n = n())
+```
+
+
+```{r}
+top5 <- seurat_markers %>%
+	group_by(cluster) %>%
+	top_n(5, wt = avg_log2FC)
+
+DoHeatmap(tnbc_seurat, features = top5$gene) + NoLegend()
+```
+
+```{r}
+top10 <- seurat_markers %>%
+	group_by(cluster) %>%
+	top_n(10, wt = avg_log2FC)
+
+DoHeatmap(tnbc_seurat, features = top10$gene) + NoLegend() +
+	theme(axis.text.y = element_blank())
+```
+
+
+
+
+
+
