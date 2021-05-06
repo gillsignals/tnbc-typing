@@ -25,7 +25,9 @@ library(SingleCellExperiment)
 library(Seurat)
 library(pdftools)
 library(ggrepel)
+library(SC3)
 
+# black, red, skyblue, orange, green, yellow, darkblue, pink 
 colorblind_palette <- c("#000000", "#D55E00",  "#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2",  "#CC79A7")
 ```
 
@@ -1232,3 +1234,138 @@ celltype_de_heat
 # save heatmap of top 5 DE genes for each cell type
 ggsave(celltype_de_heat, filename = "results/type-de-genes-heat.png", width = 8, height = 6)
 ```
+
+
+## SC3 consensus k-means clustering
+
+*Important:* Exact SC3 consensus clusters will differ every time this code is run, despite seeds being set. SC3 code was run once but is now marked to `eval=FALSE` so it will not overwrite itself. My output data are available upon request.
+
+### Format SingleCellExperiment for SC3
+
+```{r}
+# subset raw count assay to the filtered genes and filtered cells
+sce_sc3 <- sce_tpm[rownames(sce),colnames(sce)]
+
+# add normalized counts (slot is required to be named logcounts for compatibility with SC3)
+assay(sce_sc3, "logcounts") <- assay(sce)
+```
+
+### Perform SC3 clustering
+
+Instead of performing sc3 as a single wrapper call (`sc3(sce_sc3, ks = ...)`), perform it piece-wise so k can be estimated with `sc3_estimate_k`.
+
+The optimal value of k was estimated using the `sc3_estimate_k` function from SC3. "SC3 utilizes the Tracy-Widom theory on random matrices to estimate k" (Kiselev et al., 2017).
+
+```{r}
+# prepare default parameters
+sce_sc3 <- sc3_prepare(sce_sc3)
+
+# estimate optimal k
+set.seed(42)   # I don't think the estimation is stochastic, but adding this just in case
+sce_sc3 <- sc3_estimate_k(sce_sc3)
+
+# show estimated optimal k
+metadata(sce_sc3)$sc3$k_estimation
+```
+
+
+
+```{r eval=FALSE}
+# calculate distances between cells
+sce_sc3 <- sc3_calc_dists(sce_sc3)
+
+# transform distance matrices with PCA and graph Laplacian
+sce_sc3 <- sc3_calc_transfs(sce_sc3)
+
+# perform k-means clustering with estimated optimal k
+set.seed(42)    # again, not sure this next step is stochastic, but it very well may be because k-means usually is
+sce_sc3 <- sc3_kmeans(sce_sc3, ks = 29)
+
+# calculate consensus matrix for the clustering results using various distance metrics, transformations, and random seeds
+sce_sc3 <- sc3_calc_consens(sce_sc3)
+
+# check that all cells are in the same order in both the sce_sc3 and Seurat objects
+all(colnames(tnbc_seurat) == colnames(sce_sc3))
+
+# add clusters to Seurat object
+tnbc_seurat$sc3_29_clusters <- sce_sc3$sc3_29_clusters
+```
+
+```{r}
+# load results from clustering
+load("rdata/tnbc_seurat_sc3.rda")
+
+# number of cells per cluster
+table(tnbc_seurat$sc3_29_clusters)
+```
+
+
+### Visualize SC3 clusters
+
+#### tSNE plot of SC3 clusters
+
+```{r}
+# color tSNE plot with SC3 clusters
+tsne_sc3_k29 <- DimPlot(tnbc_seurat, reduction = "tsne",
+		group.by = "sc3_29_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("tSNE plot of SC3 clusters with k=29")
+
+# inspect tSNE plot colored by SC3 clusters
+tsne_sc3_k29
+
+# save tSNE plot colored by SC3 clusters
+ggsave(tsne_sc3_k29, filename = "results/tsne-sc3-k29-clusters.png", width = 7, height = 4)
+```
+
+#### UMAP plot of SC3 clusters
+
+```{r}
+# color UMAP plot with SC3 clusters
+umap_sc3_k29 <- DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "sc3_29_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of SC3 clusters with k=29")
+
+# inspect UMAP plot colored by SC3 clusters
+umap_sc3_k29
+
+# save UMAP plot colored by SC3 clusters
+ggsave(umap_sc3_k29, filename = "results/umap-sc3-k29-clusters.png", width = 7, height = 4)
+```
+
+### Find genes differentially expressed across SC3 clusters
+
+```{r eval=FALSE}
+# find marker genes for sc3 clusters
+tnbc_seurat <- SetIdent(tnbc_seurat, value = "sc3_29_clusters")
+sc3_k29_markers <- FindAllMarkers(tnbc_seurat, logfc.threshold = 0.5, slot = "scale.data")
+
+# keep only differentially expressed markers with an adjusted pval less than .05
+sc3_k29_markers <- sc3_k29_markers %>%
+	filter(p_val_adj <= .05)
+
+save(sc3_k29_markers, file = "sc3_k29_markers.rda")
+```
+
+```{r}
+load("rdata/sc3_k29_markers.rda")
+
+# show top 10 marker genes per cluster (top 5 were insufficient to show good patterns)
+top10 <- sc3_k29_markers %>%
+	group_by(cluster) %>%
+	top_n(10, wt = avg_diff)
+
+# create heatmap of top 10 genes differentially expressed across SC3 clusters
+sc3_de_heat <- DoHeatmap(tnbc_seurat, features = top10$gene, size = 3) + NoLegend() +
+	theme(axis.text.y = element_blank())
+
+# inspect heatmap of SC3 cluster differentially expressed genes
+sc3_de_heat
+
+# save heatmap of SC3 cluster differentially expressed genes
+ggsave(sc3_de_heat, filename = "results/sc3-de-heat.png", width = 10, height = 10)
+```
+
+Some clusters seem composed of cells with unique expression patterns of the top 10 differentially expressed genes identified for each cluster. (for example, 6, 26, 28, 29). Other groups of distinct clusters seem to have highly similar patterns of differential expression (for example, 9-10 and 8-19-20), suggesting this approach may not be returning the most parsimonious group of biologically relevant clusters. Still other clusters had few or no distinguishing expression patterns across the set of top 10 differentially expressed genes per cluster (for example, 1, 3, 17, 18). Additional clusters had an extremely small number of cells (cluster 2 = 1 cell, cluster 5 = 5 cells, cluster 16 = 6 cells, cluster 22 = 8 cells) and may not reflect biologically meaningful subsets or may represent populations that are too rare to characterize with statistical confidence. Combined, these results suggest that the estimated optimal value of $k$ from SC3 may result in overly fine resolution of clusters and that the true number of clusters is less than 29.
+

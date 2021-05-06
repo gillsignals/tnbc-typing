@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+*IMPORTANT:* This file generates different consensus clusters every time it runs, even though I tried to set seeds. Apologies that it is not reproducible.
+
 ## Load libraries and data
 
 ```{r message = FALSE}
@@ -104,7 +106,7 @@ Use 3 values of k: 6 (the number of input cell types), 18 (the number of cluster
 
 ```{r}
 set.seed(42)    # again, not sure this next step is stochastic, but it very well may be because k-means usually is
-sce_sc3 <- sc3_kmeans(sce_sc3, ks = c(6, 18, 29))
+sce_sc3 <- sc3_kmeans(sce_sc3, ks = 29)
 ```
 
 ```{r}
@@ -169,19 +171,6 @@ tnbc_seurat$sc3_18_clusters <- sce_sc3$sc3_18_clusters
 tnbc_seurat$sc3_29_clusters <- sce_sc3$sc3_29_clusters
 ```
 
-```{r}
-DimPlot(tnbc_seurat, reduction = "umap",
-		group.by = "seurat_clusters",
-		label = TRUE, label.size = 5, repel = TRUE) +
-	ggtitle("UMAP plot of Louvain clusters")
-```
-
-```{r}
-DimPlot(tnbc_seurat, reduction = "umap",
-		group.by = "lit_cell_type",
-		label = TRUE, label.size = 5, repel = TRUE) +
-	ggtitle("UMAP plot of Louvain clusters")
-```
 
 ```{r}
 DimPlot(tnbc_seurat, reduction = "umap",
@@ -196,6 +185,7 @@ DimPlot(tnbc_seurat, reduction = "umap",
 		label = TRUE, label.size = 5, repel = TRUE) +
 	ggtitle("UMAP plot of SC3 clusters with k=18")
 ```
+
 ```{r}
 DimPlot(tnbc_seurat, reduction = "umap",
 		group.by = "sc3_29_clusters",
