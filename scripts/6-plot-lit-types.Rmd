@@ -1,0 +1,50 @@
+---
+title: "Color UMAP and tSNE by literature-based cell types"
+author: "Amy Gill"
+date: "4/19/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(ggrepel)
+
+colorblind_palette <- c("#000000", "#D55E00",  "#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2",  "#CC79A7")
+
+load("sce_post_seurat.rda")
+load("tnbc_seurat.rda")
+```
+
+```{r}
+tnbc_seurat$lit_cell_type <- sce_post_seurat$lit_cell_type
+
+save(tnbc_seurat, file = "tnbc_seurat.rda")
+```
+
+
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "tsne",
+		group.by = "lit_cell_type",
+		label = TRUE, label.size = 4, repel = TRUE) +
+	ggtitle("tSNE plot of literature-based cell types") +
+	scale_color_manual(values = colorblind_palette)
+```
+
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "lit_cell_type",
+		label = TRUE, label.size = 4, repel = TRUE) +
+	ggtitle("UMAP plot of literature-based cell types") +
+	scale_color_manual(values = colorblind_palette)
+```
+
+
+

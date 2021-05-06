@@ -1,0 +1,58 @@
+---
+title: "Gene sets for cell types"
+author: "Amy Gill"
+date: "4/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(tidyverse)
+
+load("tnbc_seurat.rda")
+```
+
+
+```{r}
+tnbc_seurat <- SetIdent(tnbc_seurat, value = "lit_cell_type")
+celltype_markers <- FindAllMarkers(tnbc_seurat, logfc.threshold = 0.5, slot = "scale.data")
+
+# keep only differentially expressed markers with an adjusted pval less than .05
+celltype_markers <- celltype_markers %>%
+	filter(p_val_adj <= .05)
+
+save(celltype_markers, file = "celltype_markers.rda")
+```
+
+```{r}
+celltype_markers
+```
+
+
+```{r}
+# number of differentially expressed genes for each cluster
+celltype_markers %>%
+	group_by(cluster) %>%
+	summarize(n = n())
+```
+
+```{r}
+top5 <- celltype_markers %>%
+	group_by(cluster) %>%
+	top_n(5, wt = avg_diff)
+
+DoHeatmap(tnbc_seurat, features = top5$gene) + NoLegend()
+```
+
+```{r}
+top10 <- celltype_markers %>%
+	group_by(cluster) %>%
+	top_n(10, wt = avg_diff)
+
+DoHeatmap(tnbc_seurat, features = top10$gene) + NoLegend() +
+	theme(axis.text.y = element_blank())
+```

@@ -1,0 +1,610 @@
+---
+title: "Literature-based cell typing"
+author: "Amy Gill"
+date: "4/18/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load files and libraries
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(SingleCellExperiment)
+
+colorblind_palette <- c("#000000", "#D55E00",  "#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2",  "#CC79A7")
+
+load("cell_type_markers.rda")   # output from import-marker-gene-list.Rmd
+load("sce_post_seurat.rda")    # output from seurat-clustering.Rmd
+```
+
+## Expression of all expert-based marker genes above cutoff threshold
+
+All rules were derived from the supplementary material, p35-36.
+
+From the supplement, "Expression" = at or above a value of 1
+
+### Pull normalized counts into separate matrix
+
+Goal: shorthand for easy calling of the count matrix
+
+```{r}
+ct <- logcounts(sce_post_seurat)
+```
+
+
+### Pull colData into separate editable data frame
+
+Goal: use to track expr of various markers in the cells without modifying colData in place
+
+```{r}
+df <- colData(sce_post_seurat)
+df
+```
+
+### Check expression of all marker genes above a threshold of 1
+
+```{r}
+for (i in 1:nrow(cell_type_markers)) {
+	gene <- cell_type_markers$marker[i]
+	df[, gene] <- ct[gene,] > 1
+}
+
+df
+```
+
+
+
+## Find epithelial cells
+
+### Pull epithelial markers and strong epithelial markers
+
+```{r}
+epi_markers <- cell_type_markers %>%
+	filter(cell_type == "epithelial") %>%
+	pull(marker)
+
+epi_markers
+```
+
+```{r}
+strong_epi_markers <- c("EPCAM", "KRT8", "KRT18", "KRT19")
+strong_epi_markers
+```
+
+### Case 1: Cell expresses at least 2 epithelial markers
+
+```{r}
+# calculate number of epithelial genes expressed above a threshold of 1
+epi <- df[, epi_markers]
+epi_counts <- rowSums(as.matrix(epi))
+
+hist(epi_counts)
+```
+```{r}
+# mark cells as epithelial if they pass case 1
+df$epithelial <- epi_counts >= 2
+table(df$epithelial)
+```
+
+### Case 2: Cells highly express only one strong epithelial marker
+
+Cells express only one of the strongest markers (EPCAM, KRT8, KRT18, KRT19) with expression higher than 50% of the cells for that patient, for that marker.
+
+```{r}
+# inspect strong_epi_markers in cells with an epi_count of 1
+strong_epi <- df[epi_counts == 1, strong_epi_markers]
+
+# remove cells without significant expr of the strong_epi markers from strong_epi
+strong_epi <- strong_epi[rowSums(as.matrix(strong_epi)) > 0,]
+
+
+# from strong_epi, extract the single expressed marker whose expression must be compared to median for that pt
+marker_test <- data.frame(
+	sample_id = rownames(strong_epi),
+	patient_id = df[df$sample_id %in% rownames(strong_epi), "patient_id"],
+	marker = case_when(
+		strong_epi$EPCAM ~ "EPCAM",
+		strong_epi$KRT8 ~ "KRT8",
+		strong_epi$KRT18 ~ "KRT18",
+		strong_epi$KRT19 ~ "KRT19"
+	)
+)
+marker_test
+```
+
+```{r}
+# create data frame to store patient-specific median expression for strong_epi_markers
+pt_epi_df <- data.frame(patient_id = names(table(sce_post_seurat$patient_id)))
+
+for (i in 1:length(strong_epi_markers)) {
+	# set column name to Marker_50
+	colname <- paste0(strong_epi_markers[i], "_50")
+	
+	# add median expression for that marker for each patient to pt_epi_df
+	pt_epi_df[,colname] <- sapply(1:nrow(pt_epi_df), function(x){
+		pt <- pt_epi_df$patient_id[x]
+		pt_expr <- sce_post_seurat[, sce_post_seurat$patient_id == pt]
+		# find median expression for that patient for that marker
+		median(logcounts(pt_expr[strong_epi_markers[i],]))
+	})
+}
+
+pt_epi_df
+```
+
+
+```{r}
+marker_test$expr_threshold <- sapply(1:nrow(marker_test), function(i){
+	marker <- paste0(marker_test$marker[i],"_50")
+	temp <- pt_epi_df %>%
+		filter(patient_id == marker_test$patient_id[i])
+	
+	temp[, marker]
+})
+
+marker_test
+```
+
+```{r}
+marker_test$marker_expr <- sapply(1:nrow(marker_test), function(i){
+	temp <- marker_test[i,]
+	gene <- temp$marker
+	sample_id <- temp$sample_id
+	logcounts(sce_post_seurat[gene, sample_id])
+})
+
+marker_test
+```
+
+
+```{r}
+# find sample IDs for cells that pass epithelial case 2
+epi2_samples <- marker_test %>%
+	filter(marker_expr > expr_threshold) %>%
+	pull(sample_id)
+
+# mark cells as epithelial if they pass case 2 OR case 1
+df$epithelial <- ifelse(rownames(df) %in% epi2_samples, TRUE, df$epithelial)
+table(df$epithelial)
+```
+
+
+## Pull non-epithelial markers
+
+### Pull immune markers 
+
+```{r}
+# generic immune marker PTPRC
+ptprc <- "PTPRC"
+
+# T cell markers
+tcell_markers <- cell_type_markers %>%
+	filter(cell_subtype == "T cell") %>%
+	pull(marker)
+
+# B cell markers
+bcell_markers <- cell_type_markers %>%
+	filter(cell_subtype == "B cell") %>%
+	pull(marker)
+
+# macrophage markers
+macro_markers <- cell_type_markers %>%
+	filter(cell_subtype == "macrophage") %>%
+	pull(marker)
+```
+
+### T cell gene expression count
+
+```{r}
+# calculate number of epithelial genes expressed above a threshold of 1
+tcell <- df[, tcell_markers]
+tcell_counts <- rowSums(as.matrix(tcell))
+
+hist(tcell_counts)
+```
+
+### B cell gene expression count
+
+```{r}
+# calculate number of T cell genes expressed above a threshold of 1
+bcell <- df[, bcell_markers]
+bcell_counts <- rowSums(as.matrix(bcell))
+
+hist(bcell_counts)
+```
+
+### Macrophage gene expression count
+
+```{r}
+macro <- df[, macro_markers]
+macro_counts <- rowSums(as.matrix(macro))
+
+hist(macro_counts)
+```
+
+```{r}
+stroma_markers <- cell_type_markers %>%
+	filter(cell_type == "stroma") %>%
+	pull(marker)
+
+endo_markers <- cell_type_markers %>%
+	filter(cell_type == "endothelial") %>%
+	pull(marker)
+```
+
+### Stromal gene expression count
+
+```{r}
+stroma <- df[, stroma_markers]
+stroma_counts <- rowSums(as.matrix(stroma))
+
+hist(stroma_counts)
+```
+
+### Endothelial gene expression count
+
+```{r}
+endo <- df[, endo_markers]
+endo_counts <- rowSums(as.matrix(endo))
+
+hist(endo_counts)
+```
+
+```{r}
+non_epi_df <- data.frame(sample_id = df$sample_id,
+						 ptprc = df[,ptprc],
+						 tcell_counts = tcell_counts,
+						 bcell_counts = bcell_counts,
+						 macro_counts = macro_counts,
+						 stroma_counts = stroma_counts,
+						 endo_counts = endo_counts)
+
+non_epi_df
+```
+
+## Classify immune cells
+
+### T cells
+
+#### T cell case 1: only T cell immune markers
+
+```{r}
+# at least 2 T cell markers and no other immune markers
+tcell_id_1 <- non_epi_df %>%
+	filter(tcell_counts >= 2,
+#		   epi_counts == 0,
+		   bcell_counts == 0,
+		   macro_counts == 0,
+#		   stroma_counts == 0,
+#		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### T cell case 2: PTPRC and only T cell immune markers (at least 1)
+
+```{r}
+# PTPRC and 1 T cell marker with no other immune markers
+tcell_id_2 <- non_epi_df %>%
+	filter(ptprc == TRUE,
+		   tcell_counts >= 1,
+#		   epi_counts == 0,
+		   bcell_counts == 0,
+		   macro_counts == 0,
+		   stroma_counts == 0,
+		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### T cell case 3: At least 3 T cell markers and no more than 1 other immune markers
+
+```{r}
+# at least 3 T cell markers and no more than 1 other immune cell marker
+tcell_id_3 <- non_epi_df %>%
+	filter(tcell_counts >= 3,
+		   bcell_counts + macro_counts <= 1,
+#		   (bcell_counts == 1 & macro_counts == 0) | (bcell_counts == 0 & macro_counts == 1),
+#		   epi_counts == 0,
+#		   stroma_counts == 0,
+#		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### Label all T cells
+
+```{r}
+tcell_id <- c(tcell_id_1, tcell_id_2, tcell_id_3)
+
+df$tcell <- df$sample_id %in% tcell_id
+
+table(df$tcell)
+```
+
+### B cells
+
+#### B cell case 1: only B cell immune markers
+
+```{r}
+# at least 2 B cell markers and no other immune markers
+bcell_id_1 <- non_epi_df %>%
+	filter(bcell_counts >= 2,
+		   tcell_counts == 0,
+		   macro_counts == 0,
+#		   epi_counts == 0,
+#		   stroma_counts == 0,
+#		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### B cell case 2: PTPRC and only B cell immune markers (at least 1)
+
+```{r}
+# PTPRC and 1 B cell marker with no other immune markers
+bcell_id_2 <- non_epi_df %>%
+	filter(ptprc == TRUE,
+		   bcell_counts >= 1,
+		   tcell_counts == 0,
+		   macro_counts == 0,
+#		   epi_counts == 0,
+		   stroma_counts == 0,
+		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### B cell case 3: At least 3 B cell markers and no more than 1 other immune markers
+
+```{r}
+# at least 3 B cell markers and no more than 1 other immune cell marker
+bcell_id_3 <- non_epi_df %>%
+	filter(bcell_counts >= 3,
+		   tcell_counts + macro_counts <= 1,
+#		   (tcell_counts == 1 & macro_counts == 0) | (tcell_counts == 0 & macro_counts == 1),
+#		   epi_counts == 0,
+#		   stroma_counts == 0,
+#		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### Label all B cells
+
+```{r}
+bcell_id <- c(bcell_id_1, bcell_id_2, bcell_id_3)
+
+df$bcell <- df$sample_id %in% bcell_id
+
+table(df$bcell)
+```
+
+### Macrophages
+
+#### Macrophage case 1: only macrophage immune markers
+
+```{r}
+# at least 2 macrophage markers and no other immune markers
+macro_id_1 <- non_epi_df %>%
+	filter(macro_counts >= 2,
+		   tcell_counts == 0,
+		   bcell_counts == 0,
+#		   epi_counts == 0,
+#		   stroma_counts == 0,
+#		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### Macrophage case 2: PTPRC and only macrophage immune markers (at least 1)
+
+```{r}
+# PTPRC and 1 macrophage marker with no other immune markers
+macro_id_2 <- non_epi_df %>%
+	filter(ptprc == TRUE,
+		   macro_counts >= 1,
+		   tcell_counts == 0,
+		   bcell_counts == 0,
+#		   epi_counts == 0,
+		   stroma_counts == 0,
+		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### Macrophage case 3: At least 3 macrophage markers and no more than 1 other immune markers
+
+```{r}
+# at least 3 macrophage markers and no more than 1 other immune cell marker
+macro_id_3 <- non_epi_df %>%
+	filter(macro_counts >= 3,
+		   tcell_counts + bcell_counts <= 1,
+#		   epi_counts == 0,
+#		   stroma_counts == 0,
+#		   endo_counts == 0
+) %>%
+	pull(sample_id)
+```
+
+#### Label all macrophages
+
+```{r}
+macro_id <- c(macro_id_1, macro_id_2, macro_id_3)
+
+df$macro <- df$sample_id %in% macro_id
+
+table(df$macro)
+```
+
+
+## Classify stromal and endothelial cells
+
+### Stromal cells
+
+#### Stromal cell case 1: Only stromal markers
+
+```{r}
+stroma_id_1 <- non_epi_df %>%
+	filter(stroma_counts > 0,
+		   endo_counts == 0,
+		   epi_counts == 0,
+		   tcell_counts == 0,
+		   bcell_counts == 0,
+		   macro_counts == 0) %>%
+	pull(sample_id)
+```
+
+
+#### Stromal cell case 2: At least 3 stromal markers and no more than 1 endothelial marker
+
+```{r}
+stroma_id_2 <- non_epi_df %>%
+	filter(stroma_counts >= 3,
+		   endo_counts <= 1) %>%
+	pull(sample_id)
+```
+
+#### Label all stromal cells
+
+```{r}
+stroma_id <- unique(c(stroma_id_1, stroma_id_2))
+
+df$stromal <- df$sample_id %in% stroma_id
+
+table(df$stromal)
+```
+
+### Endothelial cells
+
+#### Endothelial cell case 1: Only endothelial markers
+
+```{r}
+endo_id_1 <- non_epi_df %>%
+	filter(endo_counts > 0,
+		   epi_counts == 0,
+		   stroma_counts == 0,
+		   tcell_counts == 0,
+		   bcell_counts == 0,
+		   macro_counts == 0) %>%
+	pull(sample_id)
+```
+
+
+#### Endothelial cell case 2: At least 3 endothelial markers and no more than 1 stromal marker
+
+```{r}
+endo_id_2 <- non_epi_df %>%
+	filter(endo_counts >= 3,
+		   stroma_counts <= 1) %>%
+	pull(sample_id)
+```
+
+#### Label all endothelial cells
+
+```{r}
+endo_id <- unique(c(endo_id_1, endo_id_2))
+
+df$endothelial <- df$sample_id %in% endo_id
+
+table(df$endothelial)
+```
+
+## Decide cell type 
+
+```{r}
+type_df <- as.data.frame(df) %>%
+	select(sample_id, patient_id, epithelial, tcell, bcell, macro, stromal, endothelial)
+
+
+epi_only_id <- type_df %>%
+	filter(epithelial, !tcell, !bcell, !macro, !endothelial) %>%  # don't remove things classified as epi + stroma (EMT)
+	pull(sample_id)
+
+t_only_id <- type_df %>%
+	filter(tcell, !epithelial, !bcell, !macro, !stromal, !endothelial) %>%
+	pull(sample_id)
+
+b_only_id <- type_df %>%
+	filter(bcell, !epithelial, !tcell, !macro, !stromal, !endothelial) %>%
+	pull(sample_id)
+
+macro_only_id <- type_df %>%
+	filter(macro, !epithelial, !tcell, !bcell, !stromal, !endothelial) %>%
+	pull(sample_id)
+
+stromal_only_id <- type_df %>%
+	filter(stromal, !epithelial, !tcell, !bcell, !macro, !endothelial) %>%
+	pull(sample_id)
+
+endo_only_id <- type_df %>%
+	filter(endothelial, !epithelial, !tcell, !bcell, !macro, !stromal) %>%
+	pull(sample_id)
+
+unknown_id <- type_df %>%
+	filter(!epithelial, !tcell, !bcell, !macro, !stromal, !endothelial) %>%
+	pull(sample_id)
+
+undecided_id <- type_df %>%
+	filter(!(sample_id %in% c(epi_only_id, t_only_id, b_only_id, macro_only_id,
+							  stromal_only_id, endo_only_id, unknown_id))) %>%
+	pull(sample_id)
+```
+
+```{r}
+lit_cell_type <- type_df %>%
+	mutate(cell_type = case_when(
+		sample_id %in% epi_only_id ~ "epithelial",
+		sample_id %in% t_only_id ~ "T cell",
+		sample_id %in% b_only_id ~ "B cell",
+		sample_id %in% macro_only_id ~ "macrophage",
+		sample_id %in% stromal_only_id ~ "stromal",
+		sample_id %in% endo_only_id ~ "endothelial",
+		sample_id %in% unknown_id ~ "unknown",
+		sample_id %in% undecided_id ~ "undecided"
+	)) %>%
+	pull(cell_type)
+
+
+
+table(lit_cell_type)
+```
+
+```{r}
+sce_post_seurat$lit_cell_type <- lit_cell_type
+```
+
+```{r}
+save(sce_post_seurat, file = "sce_post_seurat.rda")
+```
+
+## Cell type proportions bar graph
+
+```{r}
+as.data.frame(colData(sce_post_seurat)) %>%
+	group_by(patient_id, lit_cell_type) %>%
+	summarize(n=n()) %>%
+	ggplot(aes(patient_id, n, fill = lit_cell_type)) +
+	geom_bar(stat = "identity", position = "fill") +
+	xlab("Patient ID") +
+	ylab("Proportion of cells") +
+	scale_fill_manual (values = colorblind_palette)
+```
+
+
+```{r}
+as.data.frame(colData(sce_post_seurat)) %>%
+	group_by(patient_id, lit_cell_type) %>%
+	summarize(n=n()) %>%
+	ggplot(aes(patient_id, n, fill = lit_cell_type)) +
+	geom_bar(stat = "identity") +
+	scale_fill_manual(values = colorblind_palette) +
+	xlab("Patient ID") +
+	ylab("Number of cells")
+```
+
