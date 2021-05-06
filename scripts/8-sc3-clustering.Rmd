@@ -1,0 +1,212 @@
+---
+title: "SC3 consensus clustering"
+author: "Amy Gill"
+date: "5/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and data
+
+```{r message = FALSE}
+library(SingleCellExperiment)
+library(SC3)
+library(tidyverse)
+library(Seurat)
+
+load("sce.rda")    # normalized counts
+
+load("sce_tpm.rda")    # raw counts for calculating dropouts
+
+load("tnbc_seurat.rda")   # for visualization
+```
+
+## Format SingleCellExperiment for SC3
+
+```{r}
+sce
+```
+
+```{r}
+sce_tpm
+```
+
+```{r}
+# subset raw count assay to the filtered genes and filtered cells
+sce_sc3 <- sce_tpm[rownames(sce),colnames(sce)]
+
+# add normalized counts (slot is required to be named logcounts for compatibility with SC3)
+assay(sce_sc3, "logcounts") <- assay(sce)
+
+sce_sc3
+```
+
+```{r}
+# clean workspace
+rm(sce)
+rm(sce_tpm)
+```
+
+
+## Perform SC3 stepwise for extra customization
+
+### Prepare parameters
+
+```{r}
+# instead of performing sc3 as a single wrapper call (sc3(sce_sc3, ks = ...)),
+# perform it piece-wise so k can be estimated with sc3_estimate_k
+
+sce_sc3 <- sc3_prepare(sce_sc3)
+```
+```{r}
+str(metadata(sce_sc3)$sc3)
+```
+
+### Estimate optimal k
+
+The optimal value of k was estimated using the `sc3_estimate_k` function from SC3. "SC3 utilizes the Tracy-Widom theory on random matrices to estimate k"
+
+```{r}
+set.seed(42)   # I don't think the estimation is stochastic, but adding this just in case
+sce_sc3 <- sc3_estimate_k(sce_sc3)
+```
+```{r}
+# show estimated optimal k
+metadata(sce_sc3)$sc3$k_estimation
+```
+
+### Calculate distances between cells
+
+```{r}
+sce_sc3 <- sc3_calc_dists(sce_sc3)
+```
+
+```{r}
+names(metadata(sce_sc3)$sc3$distances)
+```
+
+### Transform distance matrix with PCA and graph Laplacian
+
+```{r}
+sce_sc3 <- sc3_calc_transfs(sce_sc3)
+```
+
+```{r}
+names(metadata(sce_sc3)$sc3$transformations)
+```
+
+### Perform k-means clustering
+
+Use 3 values of k: 6 (the number of input cell types), 18 (the number of clusters from Louvain clustering), and 29 (the optimal value calculated)
+
+```{r}
+set.seed(42)    # again, not sure this next step is stochastic, but it very well may be because k-means usually is
+sce_sc3 <- sc3_kmeans(sce_sc3, ks = c(6, 18, 29))
+```
+
+```{r}
+names(metadata(sce_sc3)$sc3$kmeans)
+```
+
+```{r}
+# save object for now to retain k-means info, because that is overwritten in the consensus matrix calculation below
+sce_kmeans <- sce_sc3
+save(sce_kmeans, file = "sce_kmeans.rda")
+```
+
+
+### Calculate consensus matrix
+
+```{r}
+# check that there are no SC3 related columns in colData slot
+col_data <- colData(sce_sc3)
+head(col_data[ , grep("sc3_", colnames(col_data))])
+```
+
+```{r}
+sce_sc3 <- sc3_calc_consens(sce_sc3)
+```
+
+```{r}
+names(metadata(sce_sc3)$sc3$consensus)
+```
+## Find differentially expressed genes
+
+```{r}
+sce_sc3 <- sc3_calc_biology(sce_sc3)
+```
+
+
+## Inspect clusters
+
+### Tables
+
+```{r}
+table(col_data$sc3_6_clusters)
+```
+
+```{r}
+table(col_data$sc3_18_clusters)
+```
+
+```{r}
+table(col_data$sc3_29_clusters)
+```
+
+### Visualize with Seurat
+
+```{r}
+# check that all cells are in the same order in both the sce_sc3 and Seurat objects
+all(colnames(tnbc_seurat) == colnames(sce_sc3))
+```
+
+```{r}
+tnbc_seurat$sc3_6_clusters <- sce_sc3$sc3_6_clusters
+tnbc_seurat$sc3_18_clusters <- sce_sc3$sc3_18_clusters
+tnbc_seurat$sc3_29_clusters <- sce_sc3$sc3_29_clusters
+```
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "seurat_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of Louvain clusters")
+```
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "lit_cell_type",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of Louvain clusters")
+```
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "sc3_6_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of SC3 clusters with k=6")
+```
+
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "sc3_18_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of SC3 clusters with k=18")
+```
+```{r}
+DimPlot(tnbc_seurat, reduction = "umap",
+		group.by = "sc3_29_clusters",
+		label = TRUE, label.size = 5, repel = TRUE) +
+	ggtitle("UMAP plot of SC3 clusters with k=29")
+```
+## Save updated SCE and Seurat objects
+
+```{r}
+save(tnbc_seurat, file = "tnbc_seurat_sc3.rda")
+save(sce_sc3, file = "sce_sc3.rda")
+```
+
+
