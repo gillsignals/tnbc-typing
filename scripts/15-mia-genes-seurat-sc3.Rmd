@@ -1,0 +1,106 @@
+---
+title: "Gene set MIA for Seurat and cell type"
+author: "Amy Gill"
+date: "4/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(RColorBrewer)
+library(pheatmap)
+
+load("sc3_k29_markers.rda")
+load("seurat_markers.rda")
+load("sce_post_seurat.rda")
+
+# set color palettes for heatmap
+reds <- colorRampPalette(c("white", "red"))(100)
+cools_rev <- colorRampPalette(c("yellow", "limegreen", "black"))(100)
+```
+
+```{r}
+# create vectors of celltype and cluster names to iterate over
+sc3_names <- levels(sc3_k29_markers$cluster)
+seurat_names <- levels(seurat_markers$cluster)
+
+# set total number of genes
+total_genes <- nrow(sce_post_seurat)
+```
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(sc3_names), ncol = length(seurat_names))
+rownames(hyper) <- sc3_names
+colnames(hyper) <- seurat_names
+```
+
+```{r}
+for (i in 1:length(sc3_names)) {
+	# list genes upregulated in that cell type
+	sc3_genes <- sc3_k29_markers %>%
+		filter(cluster == sc3_names[i],
+			   avg_diff > 0) %>%
+		pull(gene)
+	celltype_count <- length(sc3_genes)    # number of enriched genes in cell type
+
+	# compare to all Seurat clusters
+	for (j in 1:length(seurat_names)) {
+		# list genes upregulated in that Seurat cluster
+		seurat_genes <- seurat_markers %>%
+			filter(cluster == seurat_names[j],
+				   avg_diff > 0) %>%
+			pull(gene)
+		seurat_count <- length(seurat_genes)    # number of enriched genes in Seurat cluster
+		
+		# find number of genes enriched in both the Seurat cluster and the cell type
+		overlap_count <- length(intersect(sc3_genes, seurat_genes))
+		
+		# calculate p-value for enrichment of genes in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_genes - celltype_count, seurat_count, lower.tail = FALSE)
+		
+		hyper[i,j] <- hyper_pval
+	}
+}
+
+hyper
+```
+
+```{r}
+pheatmap(hyper,
+		 cluster_rows = FALSE,
+		 cluster_cols = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of ^ genes in cell types and Seurat clusters")
+```
+```{r}
+# some p values are so small that R treats them as 0, so there's an error with -log10(p)
+# assign the 0 values to 1e-200 (less than the smallest reported value of ~1e-167)
+hyper <- ifelse(hyper < 1e-200, 1e-200, hyper)
+```
+
+
+```{r}
+pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of ^ genes in cell types and Seurat clusters")
+```
+
+```{r}
+pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of ^ genes in types and Seurat clusters")
+```
+
+Some SC3 clusters do not have a significant overlap of differentially expressed genes with any Seurat clusters (for example, SC3-2/5/16/17/22). One of these clusters (SC3-2) only had one cell, so differentially expressed genes could not be calculated. Others had a small number of cells - the largest SC3 cluster that had little overlap with Seurat clusters (SC3-17) had 20 cells. This lack of significant overlap in differentially expressed genes likely reflects lack of power due to the small size of these clusters, and again suggests that the SC3 estimated optimal value of k split cells into too many clusters.
+
+SC3 could be repeated with a range of smaller values of k, but there is no well-established rational protocol for selecting the optimal value of clusters. SC3 uses the Tracy-Widom theory on random matrices to estimate an optimal number of clusters k, but in this case the k returned by that procedure appears too large. Often, authors will manually try several values of k and select one that produces visually satisfying clusters, which is not a logical approach.

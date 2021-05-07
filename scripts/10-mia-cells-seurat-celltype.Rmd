@@ -1,0 +1,85 @@
+---
+title: "Seurat and cell type MIA for cell cluster membership"
+author: "Amy Gill"
+date: "4/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(RColorBrewer)
+library(pheatmap)
+
+load("tnbc_seurat.rda")
+
+# set color palettes for heatmap
+reds <- colorRampPalette(c("white", "red"))(100)
+cools_rev <- colorRampPalette(c("yellow", "limegreen", "black"))(100)
+```
+
+```{r}
+# create vectors of celltype and cluster to iterate over
+celltype_names <- names(table(tnbc_seurat$lit_cell_type))
+clust_names <- names(table(tnbc_seurat$seurat_clusters)) 
+
+# set total number of cells
+total_count <- length(tnbc_seurat$lit_cell_type)
+```
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(celltype_names), ncol = length(clust_names))
+rownames(hyper) <- celltype_names
+colnames(hyper) <- clust_names
+```
+
+
+```{r}
+# calculate all hypergeometric p-values for overlap between cell type and Seurat cluster
+for (i in 1:length(celltype_names)) {
+	celltype_count <- sum(tnbc_seurat$lit_cell_type == celltype_names[i])    # number of cells for given cell type
+	for (j in 1:length(clust_names)) {
+		clust_count <- sum(tnbc_seurat$seurat_clusters == clust_names[j])    # number of cells in given cluster
+		overlap_count <- sum(tnbc_seurat$lit_cell_type == celltype_names[i] & tnbc_seurat$seurat_clusters == clust_names[j])    # number of cells of type in cluster
+		
+		# calculate p-value for enrichment of cells in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_count - celltype_count, clust_count, lower.tail = FALSE)
+		
+		hyper[i, j] <- hyper_pval
+	}
+}
+```
+
+```{r}
+hyper
+```
+
+```{r}
+pheatmap(hyper,
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of cells in cell types and Seurat clusters")
+```
+
+```{r}
+pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of cells in types and Seurat clusters")
+```
+
+```{r}
+pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of cells in types and Seurat clusters")
+```
+
