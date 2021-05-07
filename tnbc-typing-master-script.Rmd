@@ -26,9 +26,15 @@ library(Seurat)
 library(pdftools)
 library(ggrepel)
 library(SC3)
+library(RColorBrewer)
+library(pheatmap)
 
-# black, red, skyblue, orange, green, yellow, darkblue, pink 
+# colorblind palette: black, red, skyblue, orange, green, yellow, darkblue, pink 
 colorblind_palette <- c("#000000", "#D55E00",  "#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2",  "#CC79A7")
+
+# color palettes for heatmaps
+reds <- colorRampPalette(c("white", "red"))(100)
+cools_rev <- colorRampPalette(c("yellow", "limegreen", "black"))(100)
 ```
 
 ## Import single cell data from GEO
@@ -1369,3 +1375,494 @@ ggsave(sc3_de_heat, filename = "results/sc3-de-heat.png", width = 10, height = 1
 
 Some clusters seem composed of cells with unique expression patterns of the top 10 differentially expressed genes identified for each cluster. (for example, 6, 26, 28, 29). Other groups of distinct clusters seem to have highly similar patterns of differential expression (for example, 9-10 and 8-19-20), suggesting this approach may not be returning the most parsimonious group of biologically relevant clusters. Still other clusters had few or no distinguishing expression patterns across the set of top 10 differentially expressed genes per cluster (for example, 1, 3, 17, 18). Additional clusters had an extremely small number of cells (cluster 2 = 1 cell, cluster 5 = 5 cells, cluster 16 = 6 cells, cluster 22 = 8 cells) and may not reflect biologically meaningful subsets or may represent populations that are too rare to characterize with statistical confidence. Combined, these results suggest that the estimated optimal value of $k$ from SC3 may result in overly fine resolution of clusters and that the true number of clusters is less than 29.
 
+## Multimodal intersection analysis (MIA)
+
+### MIA: Marker-based cell types vs Louvain/Seurat clusters
+
+```{r}
+# create vectors of celltype and cluster to iterate over
+celltype_names <- names(table(tnbc_seurat$lit_cell_type))
+seurat_names <- names(table(tnbc_seurat$seurat_clusters)) 
+
+# set total number of cells
+total_count <- length(tnbc_seurat$lit_cell_type)
+
+# set total number of genes
+total_genes <- nrow(sce_post_seurat)
+```
+
+#### Cell overlap: Cell types vs Louvain
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(celltype_names), ncol = length(seurat_names))
+rownames(hyper) <- celltype_names
+colnames(hyper) <- seurat_names
+
+# calculate all hypergeometric p-values for overlap between cell type and Seurat cluster
+for (i in 1:length(celltype_names)) {
+	celltype_count <- sum(tnbc_seurat$lit_cell_type == celltype_names[i])    # number of cells for given cell type
+	for (j in 1:length(seurat_names)) {
+		clust_count <- sum(tnbc_seurat$seurat_clusters == seurat_names[j])    # number of cells in given cluster
+		overlap_count <- sum(tnbc_seurat$lit_cell_type == celltype_names[i] & tnbc_seurat$seurat_clusters == seurat_names[j])    # number of cells of type in cluster
+		
+		# calculate p-value for enrichment of cells in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_count - celltype_count, clust_count, lower.tail = FALSE)
+		
+		hyper[i, j] <- hyper_pval
+	}
+}
+```
+
+```{r}
+# create heatmap of p-values
+mia_cells_type_louv_pval <- pheatmap(hyper,
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of cells in types and Louvain clusters")
+
+# inspect heatmap of p-values
+mia_cells_type_louv_pval
+
+# save heatmap of p-values
+ggsave(mia_cells_type_louv_pval, filename = "results/mia-cells-type-louv-pval.png", height = 4, width = 8)
+```
+
+```{r}
+# create heatmap of -log10(p-values)
+mia_cells_type_louv_log_pval <- pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of cells in types and Louvain clusters")
+
+# inspect heatmap of log10 p-values
+mia_cells_type_louv_log_pval
+
+# save heatmap of log10 p-values
+ggsave(mia_cells_type_louv_log_pval, filename = "results/mia-cells-type-louv-log-pval.png", height = 4, width = 8)
+```
+
+```{r}
+# create heatmap of sqrt(-log10(p-values))
+mia_cells_type_louv_sqrt_log_pval <- pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of cells in types and Louvain clusters")
+
+# inspect heatmap of sqrt log10 p-values
+mia_cells_type_louv_sqrt_log_pval
+
+# save heatmap of sqrt log10 p-values
+ggsave(mia_cells_type_louv_sqrt_log_pval, filename = "results/mia-cells-type-louv-sqrt-log-pval.png", height = 4, width = 8)
+```
+
+#### Gene set overlap: Cell types vs Louvain
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(celltype_names), ncol = length(seurat_names))
+rownames(hyper) <- celltype_names
+colnames(hyper) <- seurat_names
+```
+
+```{r}
+for (i in 1:length(celltype_names)) {
+	# list genes upregulated in that cell type
+	celltype_genes <- celltype_markers %>%
+		filter(cluster == celltype_names[i],
+			   avg_diff > 0) %>%
+		pull(gene)
+	celltype_count <- length(celltype_genes)    # number of enriched genes in cell type
+
+	# compare to all Seurat clusters
+	for (j in 1:length(seurat_names)) {
+		# list genes upregulated in that Seurat cluster
+		seurat_genes <- seurat_markers %>%
+			filter(cluster == seurat_names[j],
+				   avg_diff > 0) %>%
+			pull(gene)
+		seurat_count <- length(seurat_genes)    # number of enriched genes in Seurat cluster
+		
+		# find number of genes enriched in both the Seurat cluster and the cell type
+		overlap_count <- length(intersect(celltype_genes, seurat_genes))
+		
+		# calculate p-value for enrichment of genes in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_genes - celltype_count, seurat_count, lower.tail = FALSE)
+		
+		hyper[i,j] <- hyper_pval
+	}
+}
+```
+
+```{r}
+# create heatmap of p-values
+mia_genes_type_louv_pval <- pheatmap(hyper,
+		 cluster_rows = FALSE,
+		 cluster_cols = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of ^ genes in cell types and Louvain clusters")
+
+# inspect heatmap of p-values
+mia_genes_type_louv_pval
+
+# save heatmap of p-values
+ggsave(mia_genes_type_louv_pval, filename = "results/mia-genes-type-louv-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# some p values are so small that R treats them as 0, so there's an error with -log10(p)
+# assign the 0 values to 1e-200 (less than the smallest reported value of ~1e-143)
+hyper <- ifelse(hyper < 1e-200, 1e-200, hyper)
+
+# create heatmap of -log10(p-values)
+mia_genes_type_louv_log_pval <- pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of ^ genes in cell types and Louvain clusters")
+
+# inspect heatmap of -log10(p-values)
+mia_genes_type_louv_log_pval
+
+# save heatmap of -log10(p-values)
+ggsave(mia_genes_type_louv_log_pval, filename = "results/mia-genes-type-louv-log-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# create heatmap of sqrt(-log10(p-values))
+mia_genes_type_louv_sqrt_log_pval <- pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of ^ genes in types and Louvain clusters")
+
+# inspect heatmap of sqrt(-log10(p-values))
+mia_genes_type_louv_sqrt_log_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_genes_type_louv_sqrt_log_pval, filename = "results/mia-genes-type-louv-sqrt-log-pval.png", width = 8, height = 4)
+```
+
+### MIA: Marker-based cell types vs k-means/SC3 clusters
+
+```{r}
+# create vector of SC3 cluster to iterate over
+sc3_names <- names(table(tnbc_seurat$sc3_29_clusters)) 
+```
+
+
+#### Cell overlap: Cell types vs k-means
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(celltype_names), ncol = length(sc3_names))
+rownames(hyper) <- celltype_names
+colnames(hyper) <- sc3_names
+
+# calculate all hypergeometric p-values for cell overlap between cell type and k-means/SC3 cluster
+for (i in 1:length(celltype_names)) {
+	celltype_count <- sum(tnbc_seurat$lit_cell_type == celltype_names[i])    # number of cells for given cell type
+	for (j in 1:length(sc3_names)) {
+		clust_count <- sum(tnbc_seurat$sc3_29_clusters == sc3_names[j])    # number of cells in given cluster
+		overlap_count <- sum(tnbc_seurat$lit_cell_type == celltype_names[i] & tnbc_seurat$sc3_29_clusters == sc3_names[j])    # number of cells of type in cluster
+		
+		# calculate p-value for enrichment of cells in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_count - celltype_count, clust_count, lower.tail = FALSE)
+		
+		hyper[i, j] <- hyper_pval
+	}
+}
+```
+
+```{r}
+# create heatmap of p-values
+mia_cells_type_sc3_pval <- pheatmap(hyper,
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of cells in cell types and k-means/SC3 clusters")
+
+# inspect heatmap of p-values
+mia_cells_type_sc3_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_cells_type_sc3_pval, filename = "results/mia-cells-type-sc3-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# create heatmap of -log10(p-values)
+mia_cells_type_sc3_log_pval <- pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of cells in cell types and k-means/SC3 clusters")
+
+# inspect heatmap of sqrt(-log10(p-values))
+mia_cells_type_sc3_log_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_cells_type_sc3_log_pval, filename = "results/mia-cells-type-sc3-log-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# create heatmap of sqrt(-log10(p-values))
+mia_cells_type_sc3_sqrt_log_pval <- pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of cells in types and k-means/SC3 clusters")
+
+# inspect heatmap of sqrt(-log10(p-values))
+mia_cells_type_sc3_sqrt_log_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_cells_type_sc3_sqrt_log_pval, filename = "results/mia-cells-type-sc3-sqrt-log-pval.png", width = 8, height = 4)
+```
+
+#### Gene set overlap: Cell types vs k-means
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(celltype_names), ncol = length(sc3_names))
+rownames(hyper) <- celltype_names
+colnames(hyper) <- sc3_names
+
+# calculate all hypergeometric p-values for gene set overlap between cell type and k-means/SC3 cluster
+for (i in 1:length(celltype_names)) {
+	# list genes upregulated in that cell type
+	celltype_genes <- celltype_markers %>%
+		filter(cluster == celltype_names[i],
+			   avg_diff > 0) %>%
+		pull(gene)
+	celltype_count <- length(celltype_genes)    # number of enriched genes in cell type
+
+	# compare to all SC3 clusters
+	for (j in 1:length(sc3_names)) {
+		# list genes upregulated in that Seurat cluster
+		sc3_genes <- sc3_k29_markers %>%
+			filter(cluster == sc3_names[j],
+				   avg_diff > 0) %>%
+			pull(gene)
+		sc3_count <- length(sc3_genes)    # number of enriched genes in SC3 cluster
+		
+		# find number of genes enriched in both the SC3 cluster and the cell type
+		overlap_count <- length(intersect(celltype_genes, sc3_genes))
+		
+		# calculate p-value for enrichment of genes in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_genes - celltype_count, sc3_count, lower.tail = FALSE)
+		
+		hyper[i,j] <- hyper_pval
+	}
+}
+```
+
+```{r}
+# create heatmap of p-values
+mia_genes_type_sc3_pval <- pheatmap(hyper,
+		 cluster_rows = FALSE,
+		 cluster_cols = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of ^ genes in cell types and SC3 clusters")
+
+# inspect heatmap of p-values
+mia_genes_type_sc3_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_genes_type_sc3_pval, filename = "results/mia-genes-type-sc3-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# some p values are so small that R treats them as 0, so there's an error with -log10(p)
+# assign the 0 values to 1e-300 (less than the smallest reported value of ~1e-294)
+hyper <- ifelse(hyper < 1e-300, 1e-300, hyper)
+
+# create heatmap of -log10(p-values)
+mia_genes_type_sc3_log_pval <- pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of ^ genes in cell types and SC3 clusters")
+
+# inspect heatmap of -log10(p-values)
+mia_genes_type_sc3_log_pval
+
+# save heatmap of -log10(p-values)
+ggsave(mia_genes_type_sc3_log_pval, filename = "results/mia-genes-type-sc3-log-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# create heatmap of sqrt(-log10(p-values))
+mia_genes_type_sc3_sqrt_log_pval <- pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of ^ genes in types and SC3 clusters")
+
+# inspect heatmap of sqrt(-log10(p-values))
+mia_genes_type_sc3_sqrt_log_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_genes_type_sc3_sqrt_log_pval, filename = "results/mia-genes-type-sc3-sqrt-log-pval.png", width = 8, height = 4)
+```
+
+### MIA: k-means/SC3 vs Louvain/Seurat clusters
+
+#### Cell overlap: k-means vs Louvain
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(sc3_names), ncol = length(seurat_names))
+rownames(hyper) <- sc3_names
+colnames(hyper) <- seurat_names
+
+# calculate all hypergeometric p-values for overlap between SC3 and Seurat cluster
+for (i in 1:length(sc3_names)) {
+	sc3_count <- sum(tnbc_seurat$sc3_29_clusters == sc3_names[i])    # number of cells for given cell type
+	for (j in 1:length(seurat_names)) {
+		seurat_count <- sum(tnbc_seurat$seurat_clusters == seurat_names[j])    # number of cells in given cluster
+		overlap_count <- sum(tnbc_seurat$sc3_29_clusters == sc3_names[i] & tnbc_seurat$seurat_clusters == seurat_names[j])    # number of cells of type in cluster
+		
+		# calculate p-value for enrichment of cells in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, sc3_count, total_count - sc3_count, seurat_count, lower.tail = FALSE)
+		
+		hyper[i, j] <- hyper_pval
+	}
+}
+```
+
+
+```{r}
+mia_cells_louv_sc3_pval <- pheatmap(hyper,
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of cells in k-means/SC3 and Seurat clusters")
+
+# inspect heatmap of sqrt(-log10(p-values))
+mia_cells_louv_sc3_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_cells_louv_sc3_pval, filename = "results/mia-cells-louv-sc3-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# create heatmap of -log10(p-values)
+mia_cells_louv_sc3_log_pval <- pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of cells in k-means/SC3 and Louvain clusters")
+
+# inspect heatmap of -log10(p-values)
+mia_cells_louv_sc3_log_pval
+
+# save heatmap of -log10(p-values)
+ggsave(mia_cells_louv_sc3_log_pval, filename = "results/mia-cells-louv-sc3-log-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# create heatmap of sqrt(-log10(p-values))
+mia_cells_louv_sc3_sqrt_log_pval <- pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of cells in k-means/SC3 and Louvain clusters")
+
+# inspect heatmap of sqrt(-log10(p-values))
+mia_cells_louv_sc3_sqrt_log_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_cells_louv_sc3_sqrt_log_pval, filename = "results/mia-cells-louv-sc3-sqrt-log-pval.png", width = 8, height = 4)
+```
+
+#### Gene set overlap: k-means vs Louvain
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(sc3_names), ncol = length(seurat_names))
+rownames(hyper) <- sc3_names
+colnames(hyper) <- seurat_names
+
+for (i in 1:length(sc3_names)) {
+	# list genes upregulated in that SC3 cluster
+	sc3_genes <- sc3_k29_markers %>%
+		filter(cluster == sc3_names[i],
+			   avg_diff > 0) %>%
+		pull(gene)
+	celltype_count <- length(sc3_genes)    # number of enriched genes in SC3 cluster
+
+	# compare to all Seurat clusters
+	for (j in 1:length(seurat_names)) {
+		# list genes upregulated in that Seurat cluster
+		seurat_genes <- seurat_markers %>%
+			filter(cluster == seurat_names[j],
+				   avg_diff > 0) %>%
+			pull(gene)
+		seurat_count <- length(seurat_genes)    # number of enriched genes in Seurat cluster
+		
+		# find number of genes enriched in both the Seurat cluster and the SC3 cluster
+		overlap_count <- length(intersect(sc3_genes, seurat_genes))
+		
+		# calculate p-value for enrichment of genes in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_genes - celltype_count, seurat_count, lower.tail = FALSE)
+		
+		hyper[i,j] <- hyper_pval
+	}
+}
+```
+
+```{r}
+# create heatmap of p-values
+mia_genes_louv_sc3_pval <- pheatmap(hyper,
+		 cluster_rows = FALSE,
+		 cluster_cols = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of ^ genes in cell types and Seurat clusters")
+
+# inspect heatmap of p-values)
+mia_genes_louv_sc3_pval
+
+# save heatmap of p-values
+ggsave(mia_genes_louv_sc3_pval, filename = "results/mia-genes-louv-sc3-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# some p values are so small that R treats them as 0, so there's an error with -log10(p)
+# assign the 0 values to 1e-200 (less than the smallest reported value of ~1e-167)
+hyper <- ifelse(hyper < 1e-200, 1e-200, hyper)
+
+# create heatmap of -log10(p-values)
+mia_genes_louv_sc3_log_pval <- pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of ^ genes in cell types and Seurat clusters")
+
+# inspect heatmap of -log10(p-values)
+mia_genes_louv_sc3_log_pval
+
+# save heatmap of -log10(p-values)
+ggsave(mia_genes_louv_sc3_log_pval, filename = "results/mia-genes-louv-sc3-log-pval.png", width = 8, height = 4)
+```
+
+```{r}
+# create heatmap of sqrt(-log10(p-values))
+mia_genes_louv_sc3_sqrt_log_pval <- pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of ^ genes in types and Seurat clusters")
+
+# inspect heatmap of sqrt(-log10(p-values))
+mia_genes_louv_sc3_sqrt_log_pval
+
+# save heatmap of sqrt(-log10(p-values))
+ggsave(mia_genes_louv_sc3_sqrt_log_pval, filename = "results/mia-genes-louv-sc3-sqrt-log-pval.png", width = 8, height = 4)
+```
+
+Some SC3 clusters do not have a significant overlap of differentially expressed genes with any Seurat clusters (for example, SC3-2/5/16/17/22). One of these clusters (SC3-2) only had one cell, so differentially expressed genes could not be calculated. Others had a small number of cells - the largest SC3 cluster that had little overlap with Seurat clusters (SC3-17) had 20 cells. This lack of significant overlap in differentially expressed genes likely reflects lack of power due to the small size of these clusters, and again suggests that the SC3 estimated optimal value of k split cells into too many clusters.
+
+SC3 could be repeated with a range of smaller values of k, but there is no well-established rational protocol for selecting the optimal value of clusters. SC3 uses the Tracy-Widom theory on random matrices to estimate an optimal number of clusters k, but in this case the k returned by that procedure appears too large. Often, authors will manually try several values of k and select one that produces visually satisfying clusters, which is not a logical approach.
