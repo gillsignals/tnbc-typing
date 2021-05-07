@@ -1,0 +1,105 @@
+---
+title: "Gene set MIA for SC3 and cell type"
+author: "Amy Gill"
+date: "4/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(RColorBrewer)
+library(pheatmap)
+
+load("celltype_markers.rda")
+load("sc3_k29_markers.rda")
+load("sce_sc3.rda")
+
+# set color palettes for heatmap
+reds <- colorRampPalette(c("white", "red"))(100)
+cools_rev <- colorRampPalette(c("yellow", "limegreen", "black"))(100)
+```
+
+```{r}
+# create vectors of celltype and cluster names to iterate over
+celltype_names <- levels(celltype_markers$cluster)
+clust_names <- levels(sc3_k29_markers$cluster)
+
+# set total number of genes
+total_genes <- nrow(sce_sc3)
+```
+
+```{r}
+# initialize output matrix
+hyper <- matrix(NA, nrow = length(celltype_names), ncol = length(clust_names))
+rownames(hyper) <- celltype_names
+colnames(hyper) <- clust_names
+```
+
+
+```{r}
+for (i in 1:length(celltype_names)) {
+	# list genes upregulated in that cell type
+	celltype_genes <- celltype_markers %>%
+		filter(cluster == celltype_names[i],
+			   avg_diff > 0) %>%
+		pull(gene)
+	celltype_count <- length(celltype_genes)    # number of enriched genes in cell type
+
+	# compare to all SC3 clusters
+	for (j in 1:length(clust_names)) {
+		# list genes upregulated in that Seurat cluster
+		sc3_genes <- sc3_k29_markers %>%
+			filter(cluster == clust_names[j],
+				   avg_diff > 0) %>%
+			pull(gene)
+		sc3_count <- length(sc3_genes)    # number of enriched genes in Seurat cluster
+		
+		# find number of genes enriched in both the Seurat cluster and the cell type
+		overlap_count <- length(intersect(celltype_genes, sc3_genes))
+		
+		# calculate p-value for enrichment of genes in groups with hypergeometric test
+		hyper_pval <- phyper(overlap_count - 1, celltype_count, total_genes - celltype_count, sc3_count, lower.tail = FALSE)
+		
+		hyper[i,j] <- hyper_pval
+	}
+}
+
+hyper
+```
+
+```{r}
+pheatmap(hyper,
+		 cluster_rows = FALSE,
+		 cluster_cols = FALSE,
+		 color = cools_rev,
+		 main = "p-values for overlap of ^ genes in cell types and SC3 clusters")
+```
+
+```{r}
+# some p values are so small that R treats them as 0, so there's an error with -log10(p)
+# assign the 0 values to 1e-300 (less than the smallest reported value of ~1e-294)
+hyper <- ifelse(hyper < 1e-300, 1e-300, hyper)
+```
+
+
+```{r}
+pheatmap(-log10(hyper),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "-log10(p-values) for overlap of ^ genes in cell types and SC3 clusters")
+```
+
+```{r}
+pheatmap(sqrt(-log10(hyper)),
+		 cluster_cols = FALSE,
+		 cluster_rows = FALSE,
+		 color = reds,
+		 main = "sqrt(-log10(p-values)) for overlap of ^ genes in types and SC3 clusters")
+```
+
