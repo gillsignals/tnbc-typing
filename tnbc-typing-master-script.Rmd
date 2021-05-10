@@ -1742,7 +1742,7 @@ mia_cells_louv_sc3_pval <- pheatmap(hyper,
 		 cluster_cols = FALSE,
 		 cluster_rows = FALSE,
 		 color = cools_rev,
-		 main = "p-values for overlap of cells in k-means/SC3 and Seurat clusters")
+		 main = "p-values for overlap of cells in k-means/SC3 and Louvain clusters")
 
 # inspect heatmap of sqrt(-log10(p-values))
 mia_cells_louv_sc3_pval
@@ -1823,7 +1823,7 @@ mia_genes_louv_sc3_pval <- pheatmap(hyper,
 		 cluster_rows = FALSE,
 		 cluster_cols = FALSE,
 		 color = cools_rev,
-		 main = "p-values for overlap of ^ genes in cell types and Seurat clusters")
+		 main = "p-values for overlap of ^ genes in cell types and Louvain clusters")
 
 # inspect heatmap of p-values)
 mia_genes_louv_sc3_pval
@@ -1842,7 +1842,7 @@ mia_genes_louv_sc3_log_pval <- pheatmap(-log10(hyper),
 		 cluster_cols = FALSE,
 		 cluster_rows = FALSE,
 		 color = reds,
-		 main = "-log10(p-values) for overlap of ^ genes in cell types and Seurat clusters")
+		 main = "-log10(p-values) for overlap of ^ genes in cell types and Louvain clusters")
 
 # inspect heatmap of -log10(p-values)
 mia_genes_louv_sc3_log_pval
@@ -1857,7 +1857,7 @@ mia_genes_louv_sc3_sqrt_log_pval <- pheatmap(sqrt(-log10(hyper)),
 		 cluster_cols = FALSE,
 		 cluster_rows = FALSE,
 		 color = reds,
-		 main = "sqrt(-log10(p-values)) for overlap of ^ genes in types and Seurat clusters")
+		 main = "sqrt(-log10(p-values)) for overlap of ^ genes in types and Louvain clusters")
 
 # inspect heatmap of sqrt(-log10(p-values))
 mia_genes_louv_sc3_sqrt_log_pval
@@ -1866,6 +1866,6 @@ mia_genes_louv_sc3_sqrt_log_pval
 ggsave(mia_genes_louv_sc3_sqrt_log_pval, filename = "results/mia-genes-louv-sc3-sqrt-log-pval.png", width = 8, height = 4)
 ```
 
-Some SC3 clusters do not have a significant overlap of differentially expressed genes with any Seurat clusters (for example, SC3-2/5/16/17/22). One of these clusters (SC3-2) only had one cell, so differentially expressed genes could not be calculated. Others had a small number of cells - the largest SC3 cluster that had little overlap with Seurat clusters (SC3-17) had 20 cells. This lack of significant overlap in differentially expressed genes likely reflects lack of power due to the small size of these clusters, and again suggests that the SC3 estimated optimal value of k split cells into too many clusters.
+Some SC3 clusters do not have a significant overlap of differentially expressed genes with any Louvain clusters (for example, SC3-2/5/16/17/22). One of these clusters (SC3-2) only had one cell, so differentially expressed genes could not be calculated. Others had a small number of cells - the largest SC3 cluster that had little overlap with Louvain clusters (SC3-17) had 20 cells. This lack of significant overlap in differentially expressed genes likely reflects lack of power due to the small size of these clusters, and again suggests that the SC3 estimated optimal value of k split cells into too many clusters.
 
 SC3 could be repeated with a range of smaller values of k, but there is no well-established rational protocol for selecting the optimal value of clusters. SC3 uses the Tracy-Widom theory on random matrices to estimate an optimal number of clusters k, but in this case the k returned by that procedure appears too large. Often, authors will manually try several values of k and select one that produces visually satisfying clusters, which is not a logical approach.
